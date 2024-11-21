@@ -44,6 +44,10 @@
 static SDL_Renderer *renderer = NULL;
 static TTF_Font *font = NULL;
 static int color_invert = 0;
+int Total_count = 0;
+int Total_inter_count = 0;
+FILE *file_ptr; 
+int req_freq = 0;
 
 static int graphics_init_sdl(char *name, const char *fontdir)
 {
@@ -97,6 +101,7 @@ static void graphics_quit_sdl(void)
 		font = NULL;
 	}
 
+	fclose(file_ptr);
 	TTF_Quit();
 	SDL_Quit();
 }
@@ -176,7 +181,7 @@ static int plot_datapoint(Uint32 *pixels, float freq, float startfreq,
 	Uint32 color, opacity;
 	int x, y;
 	float signal;
-
+        
 	/* This is where the "magic" happens: interpret the signal
 	 * to output some kind of data which looks useful.  */
 
@@ -184,6 +189,8 @@ static int plot_datapoint(Uint32 *pixels, float freq, float startfreq,
 	if (data == 0)
 		data = 1;
 	signal = noise + rssi + 20 * log10f(data) - log10f(datasquaresum) * 10;
+   // Open file in write mode
+		fprintf(file_ptr,"%f,%d,%d\n",signal,rssi,data);
 
 	y = 400 - (400.0 + Y_SCALE * signal);
 
@@ -194,6 +201,9 @@ static int plot_datapoint(Uint32 *pixels, float freq, float startfreq,
 		color = BMASK | AMASK;
 		opacity = 30;
 	}
+	Total_count++;
+        if (signal > -50)
+		Total_inter_count++;
 
 	if (bigpixel(pixels, x, y, color, opacity) < 0)
 		return -1;
@@ -376,14 +386,37 @@ static int draw_sample_ath10k(Uint32 *pixels, struct scanresult *result,
 	if (highlight) {
 		/* prints some statistical data about the currently selected
 		 * data sample and auxiliary data. */
-		printf("result: freq %04d/%04d (width %d MHz), %d bins, rssi %03d, noise %03d, max_magnitude %04d max_index %03d tsf %"PRIu64" | ",
+		printf("result: freq %04d/%04d (width %d MHz), %d bins, rssi %03d, noise %03d, max_magnitude %04d max_index %03d tsf %"PRIu64" relpwr_db %3d avgpwr_db %3d total_gain_db %3d base_pwr_db %3d | ",
 		       result->sample.ath10k.header.freq1, result->sample.ath10k.header.freq1,
 		       result->sample.ath10k.header.chan_width_mhz,
 		       bins, result->sample.ath10k.header.rssi,
 		       result->sample.ath10k.header.noise, result->sample.ath10k.header.max_magnitude,
-		       result->sample.ath10k.header.max_index, result->sample.ath10k.header.tsf);
-		printf("datamax = %d, datamin = %d, datasquaresum = %d\n", datamax, datamin, datasquaresum);
+		       result->sample.ath10k.header.max_index, result->sample.ath10k.header.tsf,
+		       result->sample.ath10k.header.relpwr_db,
+		       result->sample.ath10k.header.avgpwr_db,
+		       result->sample.ath10k.header.total_gain_db,
+		       result->sample.ath10k.header.base_pwr_db);
+		//printf("datamax = %d, datamin = %d, datasquaresum = %d interf = %f\n", datamax, datamin, datasquaresum,((float)Total_inter_count/(float)Total_count)*100);
+		printf("datamax = %d, datamin = %d, datasquaresum = %d total_inter %% = %f\n", datamax, datamin, datasquaresum,((float)Total_inter_count/Total_count)*100);
 	}
+//	FILE *file_ptr;
+   
+   // Open file in write mode
+  // file_ptr = fopen("output.txt", "a"); 
+   //if (file_ptr == NULL) {
+    //   printf("Error opening file!");
+     //  return 1;
+   //}
+		//fprintf(file_ptr,"%04d/%04d, %d MHz, %d, %03d, %03d, %04d, %03d, %"PRIu64", ",
+		 //      result->sample.ath10k.header.freq1, result->sample.ath10k.header.freq1,
+		  //     result->sample.ath10k.header.chan_width_mhz,
+		   //    bins, result->sample.ath10k.header.rssi,
+		    //   result->sample.ath10k.header.noise, result->sample.ath10k.header.max_magnitude,
+		     //  result->sample.ath10k.header.max_index, result->sample.ath10k.header.tsf);
+		//fprintf(file_ptr,"%d, %d, %d \n",datamax, datamin, datasquaresum);
+	//		Total_count =0;
+	//		Total_inter_count=0;
+//			fclose(file_ptr);
 
 	for (i = 0; i < bins; i++) {
 		float freq;
@@ -432,7 +465,7 @@ static int draw_sample_ath11k(Uint32 *pixels, struct scanresult *result,
 		       result->sample.ath11k.header.noise, result->sample.ath11k.header.max_magnitude,
 		       result->sample.ath11k.header.max_index, result->sample.ath11k.header.max_exp,
 		       result->sample.ath11k.header.tsf);
-		printf("datamax = %d, datamin = %d, datasquaresum = %d\n", datamax, datamin, datasquaresum);
+		printf("datamax = %d, datamin = %d, datasquaresum = %d interf = %d\n", datamax, datamin, datasquaresum,(Total_inter_count/Total_count)*100);
 	}
 
 	for (i = 0; i < bins; i++) {
@@ -510,19 +543,23 @@ static int draw_picture(int highlight, int startfreq)
 		case ATH_FFT_SAMPLE_HT20:
 			if (rnum == highlight)
 				highlight_freq = result->sample.ht20.freq;
-
+                        if ((req_freq != 0) && (result->sample.ht20.freq == req_freq))  
+				continue;
 			draw_sample_ht20(pixels, result, startfreq, rnum == highlight);
 			break;
 		case ATH_FFT_SAMPLE_HT20_40:
 			if (rnum == highlight)
 				highlight_freq = result->sample.ht40.freq;
 
+                        if ((req_freq != 0) && (result->sample.ht40.freq == req_freq))  
+				continue;
 			draw_sample_ht20_40(pixels, result, startfreq, rnum == highlight);
 			break;
 		case ATH_FFT_SAMPLE_ATH10K:
 			if (rnum == highlight)
 				highlight_freq = result->sample.ath10k.header.freq1;
-
+                        if ((req_freq != 0) && (result->sample.ath10k.header.freq1 != req_freq))  
+				continue;
 			draw_sample_ath10k(pixels, result, startfreq, rnum == highlight);
 			/* TODO */
 			break;
@@ -566,6 +603,10 @@ static void graphics_main(char *name, char *fontdir)
 	int change = 1, scroll = 0;
 	int startfreq = 2350, accel = 0;
 	int highlight_freq = startfreq;
+	file_ptr = fopen("data_output.txt", "a"); 
+	if (file_ptr == NULL) {
+		printf("Error opening file!");
+	}
 
 	if (graphics_init_sdl(name, fontdir) < 0) {
 		fprintf(stderr, "Failed to initialize graphics.\n");
@@ -713,7 +754,8 @@ int main(int argc, char *argv[])
 
 	if (argc >= 1)
 		ss_name = argv[0];
-
+        if (argc >= 2)
+		req_freq = atoi(argv[1]);
 	fprintf(stderr, "WARNING: Experimental Software! Don't trust anything you see. :)\n");
 	fprintf(stderr, "\n");
 

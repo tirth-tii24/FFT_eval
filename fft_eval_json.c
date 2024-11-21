@@ -15,8 +15,127 @@
 #include <math.h>
 #include <stddef.h>
 #include <stdio.h>
-
+#include <stdlib.h>
+#include <string.h>
 #include "fft_eval.h"
+
+#define MAX_RSSI_SUPPORT 100
+int rssi_list[MAX_RSSI_SUPPORT] = {0};
+int req_freq = 0;
+
+int get_data(int rssi)
+{
+	int i,handle=0,data,bins;
+	double sum = 0.0, sum_sq = 0.0, mean, variance, index = 0.0;
+	struct scanresult *result;
+	memset(rssi_list,0,sizeof(int)*100);
+	for (result = result_list; result; result = result->next) {
+		switch (result->sample.tlv.type) {
+
+		case ATH_FFT_SAMPLE_HT20:
+			if (result->sample.ht20.rssi != rssi)
+				continue;
+			for (i = 0; i < SPECTRAL_HT20_NUM_BINS; i++) {
+				data = result->sample.ht20.data[i] << result->sample.ht20.max_exp;
+				if (data == 0)
+					data = 1;
+			}
+			handle=1;
+			break;
+		case ATH_FFT_SAMPLE_HT20_40:
+			if (result->sample.ht40.lower_rssi != rssi)
+				continue;
+			for (i = 0; i < SPECTRAL_HT20_40_NUM_BINS; i++) {
+				data = result->sample.ht40.data[i] << result->sample.ht40.max_exp;
+				if (data == 0)
+					data = 1;
+			}
+			handle=1;
+			break;
+		case ATH_FFT_SAMPLE_ATH10K:
+			if (result->sample.ath10k.header.rssi != rssi)
+				continue;
+			bins = result->sample.tlv.length - (sizeof(result->sample.ath10k.header) - sizeof(result->sample.ath10k.header.tlv));
+			for (i = 0; i < bins; i++) {
+				data = result->sample.ath10k.data[i] << result->sample.ath10k.header.max_exp;
+				if (data == 0)
+					data = 1;
+				sum += data;        // Sum of all elements
+				sum_sq += data * data;  // Sum of squares of elements
+			}
+			handle=1;
+			break;
+		case ATH_FFT_SAMPLE_ATH11K:
+			if (result->sample.ath11k.header.rssi != rssi)
+				continue;
+			bins = result->sample.tlv.length - (sizeof(result->sample.ath11k.header) - sizeof(result->sample.ath11k.header.tlv));
+			for (i = 0; i < bins; i++) {
+				data = result->sample.ath11k.data[i] << result->sample.ath11k.header.max_exp;
+				if (data == 0)
+					data = 1;
+			}
+			handle=1;
+			break;
+	}
+	if (handle)
+		break;
+	}
+        mean = sum / bins;
+	variance = (sum_sq / bins) - (mean * mean);
+        index = (0.5 * rssi) + (0.3 * mean) + (0.2 * variance);
+	if ( index > 100 )
+		index = 100;
+        printf("[{\"rssi\":%d},{\"data_mean\":%.2f},{\"data_vari\":%2.f},{\"index\":%.2f}]\n", rssi, mean, variance,index);
+	return handle;
+}
+
+static int index_rssi(void)
+{
+	int i,max_samples=0, rssi=0;
+	struct scanresult *result;
+
+	memset(rssi_list,0,sizeof(int)*100);
+	for (result = result_list; result; result = result->next) {
+		switch (result->sample.tlv.type) {
+
+		case ATH_FFT_SAMPLE_HT20:
+			if ((req_freq != 0) && ( req_freq !=  result->sample.ht20.freq))
+				continue;
+			if (result->sample.ht20.rssi < MAX_RSSI_SUPPORT)
+				rssi_list[result->sample.ht20.rssi]++;
+			break;
+		case ATH_FFT_SAMPLE_HT20_40:
+			if ((req_freq != 0) && ( req_freq !=  result->sample.ht40.freq))
+				continue;
+			if (result->sample.ht40.lower_rssi < MAX_RSSI_SUPPORT)
+				rssi_list[result->sample.ht40.lower_rssi]++;
+			break;
+		case ATH_FFT_SAMPLE_ATH10K:
+			if ((req_freq != 0) && ( req_freq !=  result->sample.ath10k.header.freq1))
+				continue;
+			if (result->sample.ath10k.header.rssi < MAX_RSSI_SUPPORT)
+				rssi_list[result->sample.ath10k.header.rssi]++;
+			break;
+		case ATH_FFT_SAMPLE_ATH11K:
+			if ((req_freq != 0) && ( req_freq !=  result->sample.ath11k.header.freq1))
+				continue;
+			if (result->sample.ath11k.header.rssi < MAX_RSSI_SUPPORT)
+				rssi_list[result->sample.ath11k.header.rssi]++;
+			break;
+	}
+	}
+	for(i=0;i<MAX_RSSI_SUPPORT;i++)
+	{
+		if (rssi_list[i] > max_samples) {
+			max_samples = rssi_list[i];
+			rssi = i;
+		}
+	}
+	//printf("Rssi %d has %d samples\n",rssi,max_samples);
+	return rssi;
+}
+
+
 
 /*
  * print_values - spit out the analyzed values in text form, JSON-like.
@@ -28,6 +147,8 @@ static int print_values(void)
 
 	printf("[");
 	rnum = 0;
+	if (!result_list)
+		printf("No data\n");
 	for (result = result_list; result; result = result->next) {
 
 		switch (result->sample.tlv.type) {
@@ -263,16 +384,20 @@ int main(int argc, char *argv[])
 	if (argc >= 2)
 		ss_name = argv[1];
 
-	fprintf(stderr, "WARNING: Experimental Software! Don't trust anything you see. :)\n");
-	fprintf(stderr, "\n");
+	if (argc >= 3)
+		req_freq = atoi(argv[2]);
+
+	//fprintf(stderr, "WARNING: Experimental Software! Don't trust anything you see. :)\n");
+	//fprintf(stderr, "\n");
 
 	if (fft_eval_init(ss_name) < 0) {
 		fprintf(stderr, "Couldn't read scanfile ...\n");
 		usage(prog);
 		return -1;
 	}
-
-	print_values();
+	int rssi = index_rssi();
+	get_data(rssi);
+	//print_values();
 	fft_eval_exit();
 
 	return 0;

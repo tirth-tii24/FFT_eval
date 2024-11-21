@@ -263,7 +263,7 @@ int fft_eval_init(char *fname)
 		scanresults_n++;
 	}
 
-	fprintf(stderr, "read %d scan results\n", scanresults_n);
+//	fprintf(stderr, "read %d scan results\n", scanresults_n);
 	free(scandata);
 
 	return 0;
